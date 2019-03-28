@@ -1,0 +1,130 @@
+---
+title: "Détermination d'échelles structurantes de la biomasse à partir d'images acoustiques"
+author: "Compte rendu de réunion"
+date: "13 mars 2019"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = F)
+library(viridis)
+```
+
+### Personnes présentes
+
+Cédric Cotté, Sophie Donnet, Pierre Gloaguen, Camille Merland.
+
+## Discussion des données et des objectifs
+
+L'objectif est d'analyser des données acoustiques obtenues depuis 2013 (au rythme d'au moins une fois par an) lors de campagnes océanographiques dans le sud de l'océan Indien (autour des terres australes françaises).
+
+### Données
+
+Durant ces campagnes, différents transects (au moins 4) acoustiques sont effectués.
+Un transect consiste en l'enregistrement de signaux acoustiques dans une direction donnée pour une durée donnée.
+
+Ici, les 4 transects sont effectués dans des directions déterminées par les escales du Marion Dufresne.
+
+- Le premier transect est principalement Nord/Sud.
+- Le second transect est principalement Ouest-Est.
+- Le troisième transect est Sud-Nord.
+- Le quatrième transect est Ouest-Est.
+
+Sur chaque transect, le bateau émet un signal à différentes fréquences (2 depuis 2013, 5 depuis 2016). Quand le faisceau acoustique rencontre un obstacle (typiquement un organisme vivant),
+une réponse acoustique est alors obtenue en un point de l'espace. 
+
+Cette réponse est un vecteur de valeurs (une par fréquence) comprises entre 0 (forte réponse acoustique, gros objet) à -100 (faible réponse, petit objet ou rien).
+
+Chaque organisme vivant aura une réponse (plus ou moins connue) spécifique à chaque fréquence.
+
+Un signal est envoyé toutes les 3 secondes. Les données obtenues sont alors moyennées sur une grille
+de 5 mètres de profondeur par 1 kilomètre de distance parcourue par le bateau.
+Un transect pouvant être effectué sur 1000 km, et la réponse étant acquise jusqu'à 800 mètres,
+**une donnée est alors une image acoustique d'environ 160 *  1000 pixels**.
+Chaque pixel consiste alors en un vecteur de valeurs réelles. Les fortes valeurs correspondront
+à des zones de biomasse forte, contre des zones de biomasse fortes.
+
+### Objectifs
+
+Les biomasses observées sont considérées comme étant des possibles ressources d'intérêt 
+pour des grand prédateurs étudiés dans la zone (manchots, éléphants de mer, otaries..).
+In fine, l'objectif est de voir si les échelles spatiales structurant les déplacements de ces prédateurs (connues, car déjà étudiées par ailleurs) correspondent aux échelles de distribution 
+de la ressource.
+
+L'objectif est donc d'étudier les échelles de distribution spatiales de la ressource, avec plusieurs questions:
+
+- Existe-t-il différentes échelles spatiales à laquelle la distribution de la ressource?
+- Peut on déterminer quels facteurs structures chacune de ces échelles?
+
+## Discussion sur la spécificité des données et des outils possibles
+
+### Aspect spatial
+
+Une donnée consiste en image comme celle-ci
+
+```{r exemple_donnees, fig.width=10, fig.height=5}
+RandomFields::RFoptions(spConform = F)
+set.seed(123)
+xgrid <- seq(0, 100, by = 1)
+ygrid <- seq(-100, 0, by = 5)
+coords <- as.matrix(expand.grid(xgrid, ygrid))
+rho <- 5; nu <- 100; sigma2 <- 10# Matern covariance parameters
+model <- RandomFields::RMmatern(nu = nu, var = sigma2, scale = rho)
+simu <- RandomFields::RFsimulate(model, x = coords[, 1],
+                                   y = coords[, 2]) - 50
+my_data <- data.frame(Profondeur = coords[, 2], 
+                      Distance = coords[, 1], 
+                      reponse = simu)
+library(ggplot2)
+ggplot(my_data, aes(x = Distance, y = Profondeur, fill = reponse))  +
+  geom_raster() + theme_bw() + scale_fill_viridis(name = "Réponse") + 
+  scale_x_continuous(expand = c(0, 0)) + 
+  scale_y_continuous(expand = c(0, 0)) + 
+  theme(axis.text  = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.line.y = element_line(arrow = arrow(10, ends = "first",
+                                                 type = "closed")),
+        axis.line.x = element_line(arrow = arrow(10, type = "closed")),
+        axis.ticks = element_blank())
+```
+
+Cependant, les variations sur l'axe des abscisses ne sont sans doute pas comparables entre transect.
+En effet, pour un transect Nord-Sud, l'axe des abscisses est probablement celui d'un gradient de température, ce qui n'est pas forcément le cas pour un transect Ouest-Est.
+
+De manière générale les deux axes sont suceptibles de traduire le gradient de covariables différentes à prendre en compte.
+
+Sur l'axe de profondeur, il semblerait que certaines variations soient dues au cycle de vie des espèces observées. En effet, les organismes observés semblent souvent adopter un cycle nyctéméral (migration jour nuit), étant plus en surface la nuit. 
+Il semble en ce sens important de considérer la covariable *jour/nuit* de l'acquisition du signal.
+
+Cette covariable jour/nuit semble devoir être prise en compte pour toute analyse.
+
+Une première idée est peut être d'évaluer l'évolution d'un profil d'intensité le long de l'axe des abscisses.
+
+Cela pourrait se faire en agrégant toutes les profondeurs. On perdrait sans doute énormément d'information intéressante apportée par la profondeur.
+
+Une autre option serait peut être d'évaluer l'évolution du vecteur des profondeurs le long de l'axe des distances. Ce vecteur étant de longeur 160, il serait peut être raisonnable de l'aggréger plus correctement.
+
+Pour voir l'évolution de l'axe des abscisses, et l'échelle de structuration, on a évoqué l'emploi de méthodes par ondelettes. 
+
+Une approche par segmentation pourrait aussi être adoptée. Dans un tel cas, on étudiera a posteriori la "longueur" des segments, qui donnerait une info sur l'échelle adoptée.
+
+Des méthodes de segmentation d'image peuvent être envisagées.
+
+## Potentielles sources bibliographiques à explorer.
+
+Les images acoustiques sont couramment utilisées en écologie. Ainsi, il existe peut être
+des travaux ayant traité de cette aspects de détection d'échelles.
+
+Une brève bibliographie dans les travaux d'Arnaud Bertrand et de Pierre Petitgas n'a rien donné
+pour le moment. 
+
+Pierre Petitgas parle dans le livre *Computer for Fisheries Science* d'un variograme adapté
+pour les images acoustiques. Il a fait du clustering de bancs d'anchois en l'utilisant,
+mais cela avait été fait sur différents transects, donnant finalement lieu à une grille spatiale standard.
+
