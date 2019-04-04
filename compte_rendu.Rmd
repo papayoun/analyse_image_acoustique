@@ -3,9 +3,11 @@ title: "Détermination d'échelles structurantes de la biomasse à partir d'imag
 author: "Compte rendu de réunion"
 date: "13 mars 2019"
 output:
-  pdf_document: default
-  html_document: default
   word_document: default
+  html_document:
+    number_sections: yes
+  pdf_document: 
+    number_sections: yes
 editor_options: 
   chunk_output_type: console
 ---
@@ -21,7 +23,7 @@ Cédric Cotté, Sophie Donnet, Pierre Gloaguen, Camille Merland.
 
 ## Discussion des données et des objectifs
 
-L'objectif est d'analyser des données acoustiques obtenues depuis 2013 (au rythme d'au moins une fois par an) lors de campagnes océanographiques dans le sud de l'océan Indien (autour des terres australes françaises).
+L'objectif est d'analyser des données acoustiques obtenues depuis 2013 (au rythme d'au moins une fois par an) lors de campagnes océanographiques dans le sud de l'océan Indien (depuis la Réunion autour des terres australes françaises).
 
 ### Données
 
@@ -30,15 +32,15 @@ Un transect consiste en l'enregistrement de signaux acoustiques dans une directi
 
 Ici, les 4 transects sont effectués dans des directions déterminées par les escales du Marion Dufresne.
 
-- Le premier transect est principalement Nord/Sud.
-- Le second transect est principalement Ouest-Est.
-- Le troisième transect est Sud-Nord.
-- Le quatrième transect est Ouest-Est.
+- Le premier transect est principalement Nord/Sud (La Réunion-Crozet).
+- Le second transect est principalement Ouest-Est (Crozet-Kerguelen).
+- Le troisième transect est Sud-Nord (Kerguelen-Amsterdam).
+- Le quatrième transect est Ouest-Est (Amsterdam-La Réunion).
 
 Sur chaque transect, le bateau émet un signal à différentes fréquences (2 depuis 2013, 5 depuis 2016). Quand le faisceau acoustique rencontre un obstacle (typiquement un organisme vivant),
 une réponse acoustique est alors obtenue en un point de l'espace. 
 
-Cette réponse est un vecteur de valeurs (une par fréquence) comprises entre 0 (forte réponse acoustique, gros objet) à -100 (faible réponse, petit objet ou rien).
+Cette réponse est un vecteur de valeurs (une par fréquence).
 
 Chaque organisme vivant aura une réponse (plus ou moins connue) spécifique à chaque fréquence.
 
@@ -47,14 +49,15 @@ de 5 mètres de profondeur par 1 kilomètre de distance parcourue par le bateau.
 Un transect pouvant être effectué sur 1000 km, et la réponse étant acquise jusqu'à 800 mètres,
 **une donnée est alors une image acoustique d'environ 160 *  1000 pixels**.
 Chaque pixel consiste alors en un vecteur de valeurs réelles. Les fortes valeurs correspondront
-à des zones de biomasse forte, contre des zones de biomasse fortes.
+à des zones de biomasse forte, contre des zones de biomasse faibles.
 
 ### Objectifs
 
 Les biomasses observées sont considérées comme étant des possibles ressources d'intérêt 
-pour des grand prédateurs étudiés dans la zone (manchots, éléphants de mer, otaries..).
-In fine, l'objectif est de voir si les échelles spatiales structurant les déplacements de ces prédateurs (connues, car déjà étudiées par ailleurs) correspondent aux échelles de distribution 
+pour des grand prédateurs étudiés dans la zone (manchots, éléphants de mer, otaries, albatros, petrels ...).
+In fine, l'objectif est de voir si les échelles spatiales structurant les déplacements de ces prédateurs (pour certaines connues, car déjà étudiées par ailleurs) correspondent aux échelles de distribution 
 de la ressource.
+Une analyse des trajectoire des prédateurs (phoques, manchots, et albatros/petrels) des îles subantarctiques vient tout juste d’être réalisée par un collègue du laboratoire de Chizé, permettant d’obtenir les échelles auxquelles chaque animal effectue une “recherche en zone restreinte”, c’est à dire présente une activité d’alimentation d’après son comportement relié à la vitesse et la sinuosité du trajet.
 
 L'objectif est donc d'étudier les échelles de distribution spatiales de la ressource, avec plusieurs questions:
 
@@ -127,4 +130,43 @@ pour le moment.
 Pierre Petitgas parle dans le livre *Computer for Fisheries Science* d'un variograme adapté
 pour les images acoustiques. Il a fait du clustering de bancs d'anchois en l'utilisant,
 mais cela avait été fait sur différents transects, donnant finalement lieu à une grille spatiale standard.
+
+
+# Deuxième réunion (28 Mars 2019)
+
+### Personnes présentes
+
+Cédric Cotté, Sophie Donnet, Pierre Gloaguen, Camille Merland, Séverine Bord, Liliane Bel
+
+## Contenu discuté
+
+La discussion s'est posée sur comment quantifier les échelles de structuration spatiales.
+
+La première remarque est qu'il existe des échelles globales déjà connues qu'il n'est pas utile 
+de retrouver/réestimer avec les données.
+
+Il a été proposé de diviser les images en différentes sous images (des unités), correspondant à
+des caractéristiques physiques connues. 
+Ainsi, sur une image, on pourrait d'ores et déjà découper en strates de profondeurs (2 ou 3).
+De plus, sur les transects Nord Sud, les masses d'eau sont bien stratifiés, on pourrait alors 
+découper les images de ces transects ainsi.
+
+On peut avoir espoir ainsi d'avoir des champs "plus stationnaires" au sein de chaque image
+pour y amener une analyse descriptive.
+
+L'inclusion du facteur/jour nuit devra être inclu également.
+Il faudra voir comment ce facteur est représenté parmi les sous images ici.
+Il faudra espérer que les répétitions annuelles permettront d'éviter une confusion 
+d'effet possible masse d'eau / jour-nuit.
+
+Il semble naturel que ce découpage des images, basé sur les connaissances existantes des phénomènes, soit effectué par Camille et Cédric.
+
+Sur ces sous images, différents traitement exploratoires pourront être effectués. 
+Le plus naturel sera l'exploration des variogrammes empiriques. 
+Il pourrait également être intéressant d'utiliser des outils de segmentation d'images.
+In fine, l'idée étant de caractériser par des mesures interprétables les échelles spatiales présentes 
+dans chacune des sous images.
+
+Pierre s'est proposé pour faire les scripts d'import et de visualisation de ces données en R.
+Une première analyse exploratoire sera faite conjointement avec Camille dans les jours à venir.
 
