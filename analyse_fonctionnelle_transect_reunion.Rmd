@@ -1,0 +1,284 @@
+---
+title: "ACP fonctionnelle sur les profils d'énergie d'une image acoustique"
+author: Camille Merland, Liliane Bel, Séverine Bord, Cédric Cotté, Pierre Gloaguen
+  et Eric Parent
+date: "10 mai 2019"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: yes
+    toc_depth: 2
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE, message=FALSE}
+library(tidyverse)
+knitr::opts_chunk$set(echo = TRUE, fig.align = "center")
+data_path <- "data_sets/transects_decoupes_netcdf/"
+```
+
+```{r fonctions_import, include = FALSE}
+get_data_path <- function(n_trans, n_im, j_n){# Chemin vers les données
+  paste0(data_path, "figure_", n_trans, "_", n_im, "_", j_n, ".nc")
+}
+# Fonction d'import, transformation par défaut en data.frame
+import_data <- function(zone, couche, periode,
+                        as.matrix = F){
+  nc_image   <- ncdf4::nc_open(get_data_path(zone, couche, periode))
+  image_mat  <- ncdf4::ncvar_get(nc_image, "Sv1")
+  dimensions <- purrr::map(nc_image$dim, "vals") # Extraie les covariables
+  ncdf4::nc_close(nc_image)# Don't forget to close
+  if(as.matrix){
+    return(image_mat)
+  }
+  else{
+    n_x <- ncol(image_mat)
+    n_y <- nrow(image_mat)
+    as_exp_grid <- function(z) rep(z, rep(n_y, n_x))
+    xs <- 1:n_x; ys <- 1:n_y
+    grille <- expand.grid(depth = -(ys), x = xs)
+    res <- data.frame(depth = rep(-dimensions$dep1, n_x),
+                      lon =  as_exp_grid(dimensions$lon1),
+                      lat = as_exp_grid(dimensions$lat1),
+                      time = as_exp_grid(dimensions$time1),
+                      index_local = as_exp_grid(1:n_x),
+                      z = as.numeric(image_mat),
+                      zone = rep(zone, n_x * n_y),# Transect
+                      couche = rep(couche, n_x * n_y),
+                      periode = rep(periode, n_x * n_y))
+    return(res)
+  }
+}
+```
+
+```{r read_arguments, include = F}
+# Les covariables sont en fait inclues dans le nom des fichiers
+# Le pattern est une expression régulière
+# Chaine de longueur variable commençant par un chiffre finissant par J ou N
+read_arguments <- dir(data_path) %>% 
+  str_extract(pattern = "[1-9].+[J|N]") %>% # identifiant fichier
+  strsplit(split = "_") %>% # separation des champs
+  purrr::map(function(x){# mise sous forme de data.frame
+    data.frame(zone = factor(x[1], levels = 1:4),
+               couche = factor(x[2], levels = 1:3),
+               periode = factor(x[3], levels = c("J", "N")))
+  }) %>% 
+  dplyr::bind_rows()# concaténation
+```
+
+
+```{r get_all_images, include = FALSE}
+# On lit toutes les images et on les rassemble en conservant les covariables
+my_image <- read_arguments %>% 
+  purrr::pmap(.f = import_data) %>% # List of data.frame
+  dplyr::bind_rows() %>%
+  arrange(-depth) %>% 
+  mutate(index_global = rep(1:1031, 79),
+         zone_periode = paste(zone, periode, sep = "-"))
+```
+
+# Objectif de la note
+
+Cette note consiste en l'analyse de l'image générée par un transect acoustique
+par des méthodes d'analyse fonctionnelle pour essayer de déterminer les facteurs
+structurant l'image.
+
+
+# Transect considéré
+
+On considère un transect prédécoupé en plusieurs images par Camille et Cédric.
+Le prédécoupage a été fait sur la base de masses d'eau, ou **zones** (homogènes en température et altimétrie) et sur le moment d'acquisition (la **période**) qui était soit le jour (J), soit la nuit (N). 
+En chaque position géographique du navire, on a une réponse acoustique. Les positions géographiques du navire sont tracées sur la figure suivante (on a coloré selon la classification **zone-période**).
+
+```{r trajet, echo = F}
+my_image %>% 
+  select(lon, lat, zone_periode) %>% 
+  unique() %>% # On retire les répétitions dues à la profondeur
+  ggplot(mapping = aes(x = lon, y = lat)) +
+  geom_path() +
+  geom_point(mapping = aes(col = zone_periode)) + 
+  labs(x = "Longitude", y = "Latitude", col = "Zone-Période") + 
+  theme_bw() + 
+  theme(legend.position = "bottom")
+```
+
+**REMARQUES:** 
+
+1. Est ce normal d'avoir un tel creux dans les données?
+2. Pendant le croisement **4-J** (zone 4 en journée), on a un aller retour du bateau.
+
+# Image globale
+
+On peut regarder l'image globale désormais. Au vu de l'absence de continuité dans l'échantillonnage, on représente dans des cadres différents. 
+On notera la différence d'étendue sur l'axe des abscisses.
+
+```{r image_globale, echo = F}
+my_image %>% 
+  select(depth, index_global, z, zone_periode) %>% 
+  ggplot(mapping= aes(x = index_global, y = depth, fill = z)) +
+  geom_raster() + 
+  scale_fill_viridis_c() +
+  scale_y_continuous(expand = c(0, 0)) + 
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(y = "Prodondeur", fill = "Réponse", x = "Indice de colonne") + 
+  facet_wrap(~zone_periode, scales = "free_x", nrow = 1) + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle=45))
+```
+
+**REMARQUE** On peut également deviner un problème sur la colonne 990 où seules des valeurs de -100 ont été enregistrées. Dans la suite, cette colonne sera retirée.
+
+```{r retrait_ligne_990}
+# index_global est l'indice de colonne
+my_image <- dplyr::filter(my_image, index_global != 990)
+```
+
+
+# Approche fonctionnelle
+
+## Approche exploratoire
+
+Le jeu de données, stocké dans un objet `my_image`, peut être vu comme une collection de courbes (une par colonne dans l'image précédente) de fonctions $f_1, \dots f_n$ (avec $n = 1030$ ici) représentant le profil de réponse énergétique en chaque position du navire.
+
+Ces courbes sont toutes échantillonnées régulièrement en $p = 79$ profondeurs (allant de -15 à -795, tous les 10 mètres).
+On peut ainsi regarder le profil des courbes globalement
+
+```{r profil_courbes_global}
+ggplot(my_image, aes(x = depth, y = z,
+                     col = zone_periode)) +
+  geom_path(size = 1.5, alpha = 0.1, mapping = aes(group = index_global)) +
+  labs(y = "Réponse", x = "Profondeur", col = "Zone-Période") +
+  theme_bw() +
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1,
+                                                   size = 2)))
+```
+
+On peut également les regarder par couche pour visualiser les différences
+
+```{r profils_courbes}
+ggplot(my_image, aes(x = depth, y = z,
+                     col = zone_periode)) +
+  geom_path(size = 0.5, alpha = 0.4, mapping = aes(group = index_global)) +
+  facet_wrap(~zone_periode, nrow = 1) + 
+  labs(y = "Réponse", x = "Profondeur", col = "Zone-Période") +
+  theme_bw() +
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(legend.position = "none")
+```
+
+Il semble y avoir des signaux communs sur les différentes courbes, même si des différences intra et inter "Zone-Période" persistent.
+
+L'ACP fonctionnelle va permettre d'essayer de trouver une décomposition de ces courbes en une somme pondérée de différentes courbes. L'analyse des coefficients de cette somme pondérée nous permettra de nous ramener à un espace plus petit et, espérons le, interprétable. 
+
+## Analyse en composantes principales.
+
+L'objectif est de trouver un  ensemble de $K$ fonctions de $\mathbb{R}$ dans $\mathbb{R}$ $h_1,\dots h_K$, et $n$ vecteurs de coefficients $\mathbf{c}_1,\dots, \mathbf{c}_n$ (avec $\mathbf{c}_i = \left(c_{i1}, \dots, c_{iK}\right)$) pour un certain $K$ de taille *raisonnable* telle que pour toute profondeur $x$, on ait:
+$$f_i(x) = \sum_{k = 1}^K c_{ik}h_k(x)$$
+
+Pour trouver ces vecteurs coefficients $\mathbf{c}_i$ et ses fonctions $h_k$, on souhaite que:
+
+- $\frac{1}{n}\sum_{i = 1}^n c_{i1}^2$ soit maximale ($h_1$ différentie nos individus de manière maximale);
+- $h_2$ soit orthogonale à $h_1$ et $\frac{1}{n}\sum_{i = 1}^n c_{i2}^2$  soit maximale, etc\dots.
+
+L'idée principale est de trouver une projection sur un sous espace tel que:
+
+a. La perte d'information due à la projection soit la plus petite possible.
+b. Chaque axe de ce sous espace porte une information entièrement originale (il n'y aucune redondance entre l'axe 1 et l'axe 2).
+
+Cette décomposition se fait en `R` grâce au package `fda`.
+
+## Implémentation de l'ACP sous `R`
+
+Il n'est pas déraisonnable de penser qu'il y a du bruit dans les données. Du coup on va les lisser dans une base de fonctions adéquates. Par exemple une base de fonctions splines. 
+
+Pour commencer, en `R`, on se créée notre tableau de données.
+
+```{r formattage}
+# On crée le vecteur des abscisses
+abscisses <- my_image %>% 
+  pull(depth) %>% 
+  unique()
+# La matrice des courbes
+courbes <- my_image %>%
+  select(depth, z, index_global) %>% 
+  mutate(index_global = factor(index_global, 
+                               labels = paste0("Col_",
+                                               unique(index_global)))) %>% 
+  tidyr::spread(key = "index_global", value = z) %>% 
+  arrange(-depth) %>% 
+  select(-depth) %>% 
+  as.matrix()
+```
+
+On peut maintenant lisser les données:
+
+```{r lissage_donnees}
+library(fda)
+base_splines <- fda::create.bspline.basis(rangeval = range(abscisses),
+                                           nbasis = 30,
+                                           norder = 4)
+courbes_lisses_fd <- smooth.basis(argvals = abscisses, 
+                               y = courbes,
+                               fdParobj = base_splines)$fd
+courbes_lisses <- eval.fd(abscisses, courbes_lisses_fd)
+```
+
+On peut tracer ces nouvelles courbes lisses:
+
+```{r trace_courbes_lisses}
+cbind.data.frame(depth = abscisses, 
+                 courbes_lisses) %>% 
+  tidyr::gather(key = "index_global", value = "z", -depth) %>% 
+  mutate(index_global = as.numeric(str_extract(index_global, "[0-9]+"))) %>% 
+  left_join(y = my_image[, c("depth", "index_global", "zone_periode")]) %>%
+  arrange(-depth) %>% 
+  as.data.frame() %>% 
+  ggplot(aes(x = depth, y = z,
+             col = zone_periode)) +
+  geom_path(size = 1.5, alpha = 0.1, 
+            mapping = aes(group = factor(index_global))) +
+  labs(y = "Réponse", x = "Profondeur", col = "Zone-Période") +
+  theme_bw() +
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1,
+                                                   size = 2)))
+```
+
+Ce sont ces courbes lisses qu'on va résumer par une ACP. 
+Les harmoniques de l'ACP seront considérées dans la base des splines. de même degré.
+
+On commence par prendre 4 fonctions harmoniques.
+
+```{r acp_fonctionelle}
+param_harmoniques <- fdPar(base_splines)
+acp_courbes <- pca.fd(fdobj = courbes_lisses_fd, 
+                 nharm = 4, 
+                 harmfdPar = param_harmoniques)
+```
+
+On peut représenter graphiquement ces harmoniques
+
+```{r plot_composantes_principales}
+harmoniques <- acp_courbes$h
+composantes <- eval.fd(abscisses, harmoniques)
+cbind.data.frame(depth = abscisses, 
+                 composantes) %>% 
+  tidyr::gather(key = "Composante", value = "z",
+                factor_key = T, -depth) %>% 
+  ggplot(aes(x = depth, y = z,
+             col = Composante)) +
+  geom_path(size = 1, alpha = 1) +
+  labs(y = "Réponse", x = "Profondeur", col = "Composante") +
+  theme_bw() +
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(legend.position = "bottom") +
+  geom_hline(yintercept = 0) +
+  facet_wrap(~Composante) +
+  theme(legend.position = "none")
+```
+

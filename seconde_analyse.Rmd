@@ -1,0 +1,351 @@
+---
+title: "Analyse exploratoire de différents transects acoustiques"
+author: "Pierre Gloaguen"
+date: "16 avril 2019"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: yes
+    toc_depth: 2
+  html_notebook:
+    code_folding: hide
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE, message = F}
+rm(list = ls())
+library(tidyverse)
+knitr::opts_chunk$set(echo = TRUE, comment = NA, cache = T,
+                      message = F)
+data_path <- "data_sets/transects_decoupes_netcdf/"
+```
+
+# Images à disposition
+
+Les images on été décomposées en:
+
+- 4 zones, coupés selon une chute brutale de température (2 degrés pour 100km) et en altimétrie (25cm par 100km)
+    1. Zone tropicale (température autour de 22 - 33 degrés sud).  
+    2. Zone sub-tropicale (température entre 21 et 17 degrés).
+    3. Zone sub-antarctique (température sous les 11 degrés).
+    4. Zone sub-antarctique sud (température vraiment froide).
+
+- 3 couches de profondeurs (en mètres)
+    1. 0-200m
+    2. 200-500
+    3. 500-800
+
+- 2 Périodes
+    1. Jour
+    2. Nuit
+
+# Structure des données
+
+Pour l'instant, les données sont sous forme de fichier `.txt` avec une ligne
+par profondeur (notée `depth` dans le code), et une colonne par unité de déplacement (notée `x` dans le code).
+
+## Prétraitement, retrait de l'effet profondeur
+
+Pour chaque image, il semblerait qu'il existe une influence de la profondeur
+sur la structuration de la variable réponse (notée `z` dans le code).
+
+On retire cet effet en effectuant une régression polynomiale sur cette variable.
+Au vu de la quantité, on effectue une régression polynômiale en degré 10.
+Quand on aura accès aux variables **jour/nuit**, **latitude** et **longitude**,
+il sera intéressant d'enlever leurs effets également. 
+
+Pour le moment, on enlève l'effet de la variable **déplacement**, qui regroupe 
+ces trois variables. Elle sonts incluses dans la régression polynomiales.
+
+```{r fonctions_import}
+get_data_path <- function(n_trans, n_im, j_n){# Chemin vers les données
+  paste0(data_path, "figure_", n_trans, "_", n_im, "_", j_n, ".nc")
+}
+# Fonction d'import, transformation par défaut en data.frame
+import_data <- function(num_front, num_prof, jour_nuit,
+                        as.matrix = F){
+  nc_image   <- ncdf4::nc_open(get_data_path(num_front, num_prof, jour_nuit))
+  image_mat  <- ncdf4::ncvar_get(nc_image, "Sv1")
+  dimensions <- purrr::map(nc_image$dim, "vals") # Extraie les covariables
+  ncdf4::nc_close(nc_image)# Don't forget to close
+  if(as.matrix){
+    return(image_mat)
+  }
+  else{
+    n_x <- ncol(image_mat)
+    n_y <- nrow(image_mat)
+    as_exp_grid <- function(z) rep(z, rep(n_y, n_x))
+    xs <- 1:n_x; ys <- 1:n_y
+    grille <- expand.grid(depth = -(ys), x = xs)
+    res <- data.frame(depth = rep(-dimensions$dep1, n_x),
+                      lon =  as_exp_grid(dimensions$lon1),
+                      lat = as_exp_grid(dimensions$lat1),
+                      time = as_exp_grid(dimensions$time1),
+                      ind_col_ss_image = as_exp_grid(1:n_x),
+                      z = as.numeric(image_mat),
+                      zone = rep(num_front, n_x * n_y),# Transect
+                      couche = rep(num_prof, n_x * n_y),
+                      periode = rep(jour_nuit, n_x * n_y))
+    return(res)
+  }
+}
+```
+
+```{r regression_polynomiale}
+## Function toobtain residuals of polynomial regression over depth and x
+get_image_res <- function(zone, couche, periode){
+  image_df <- import_data(zone, couche, periode) %>% 
+    mutate(z_res = lm(z ~ poly(depth, lon, lat, degree = 5))$residuals)
+}
+```
+
+```{r read_arguments}
+# Le pattern est une expression régulière
+# Chaine de longueur variable commençant par un chiffre finissant par J ou N
+read_arguments <- dir(data_path) %>% 
+  str_extract(pattern = "[1-9].+[J|N]") %>% # identifiant fichier
+  strsplit(split = "_") %>% # separation des champs
+  purrr::map(function(x){# mise sous forme de data.frame
+    data.frame(zone = factor(x[1], levels = 1:4),
+               couche = factor(x[2], levels = 1:3),
+               periode = factor(x[3], levels = c("J", "N")))
+  }) %>% 
+  dplyr::bind_rows()# concaténation
+```
+
+
+```{r get_all_images}
+# Gathering all imported images in a single table
+all_images <- read_arguments %>% 
+  purrr::pmap(.f = get_image_res) %>% # List of data.frame
+  dplyr::bind_rows() %>%
+  arrange(-depth) %>% 
+  mutate(index_global = rep(1:1031, 79))
+```
+
+<!-- # Analyse descriptives préliminaires des images -->
+
+<!-- ## Structure dans les résidus {.tabset} -->
+<!-- On peut constater que cette regression semble retirer certains effets, mais -->
+<!-- une structure persiste (Le code pour la figure est représenté ci dessus) -->
+
+<!-- ```{r plot_z_res_function, cache = F} -->
+<!-- # A simpler form with facet wrap instead of 2 different plots in the tibble -->
+<!-- # is not possible, has not free scale is allowed on the z component -->
+<!-- # however, the group_by and nest workaround does the job -->
+<!-- plot_z_res <- function(zone_, couche_, periode_){ -->
+<!--   all_images %>% -->
+<!--     dplyr::filter(zone == zone_ & couche == couche_ & periode == periode_) %>% -->
+<!--     select(ind_col_ss_image, depth, z, z_res) %>% -->
+<!--     gather(key = "champ", value = "valeur", -->
+<!--            -ind_col_ss_image, -depth, -->
+<!--            convert = T, factor_key = T) %>% # 4 columns table -->
+<!--     group_by(champ) %>% -->
+<!--     nest() %>% # Create a tibble with 2 columns, data and champ -->
+<!--     mutate(plots = purrr::map2(data, champ, function(df, ch){ -->
+<!--       if(ch == "z"){ -->
+<!--         titre = "Champ initial" -->
+<!--       } -->
+<!--       else{ -->
+<!--         titre = "Résidus" -->
+<!--       } -->
+<!--       p <- ggplot(df, aes(x = ind_col_ss_image, y = depth, fill = valeur)) + -->
+<!--         geom_raster() + -->
+<!--         scale_x_continuous(expand = c(0, 0)) + -->
+<!--         scale_y_continuous(expand = c(0, 0)) + -->
+<!--         labs(y = "Profondeur", title = titre) + -->
+<!--         scale_fill_viridis_c() + -->
+<!--         theme(legend.position = "none") -->
+<!--       return(p) -->
+<!--     })) %>% # A plots column is create in the tibble -->
+<!--     gridExtra::grid.arrange(grobs = .$plots)# And plotted -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- ```{r loop_parameters, include = F, cache = F} -->
+<!-- input <- read_arguments -->
+<!-- template <- "### Zone %s , couche %s, période %s -->
+
+<!-- " # dont't forget the newline -->
+<!-- ``` -->
+
+<!-- ```{r plot_loop_z_res, echo = FALSE, results = "asis"} -->
+<!-- for (i in seq(nrow(input))) { -->
+<!--   current <- input[i, ] -->
+<!--   cat(sprintf(template, current$zone, current$couche, current$periode)) -->
+<!--   plot_z_res(current$zone, current$couche, current$periode) -->
+<!--   cat("\n\n") -->
+<!-- } -->
+<!-- ``` -->
+
+
+## Analyse fonctionnelle
+
+On peut également voir l'image globale comme étant une succession de courbes.
+
+La représentation de l'image globale est la suivante:
+
+```{r image_globale}
+ggplot(all_images, 
+       aes(y = depth, x = index_global, fill = z)) +
+  geom_raster() + 
+  scale_fill_viridis_c() +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(x = "Ship's route", y = "Depth", fill = "Energy")
+```
+
+Cette image contient 1031 colonnes. On peut voir chaque colonne comme une courbe
+(échantillonnée en 79 profondeurs).
+Les voici tracées, le dégradé de couleurs représentant une certaine proximité.
+
+```{r image_courbe_z}
+ggplot(all_images, aes(x = depth, y = z,
+                       col = factor(index_global))) +
+  geom_path(alpha = 0.5) +
+  scale_color_viridis_d() +
+  labs(y = "Energy response", x = "Depth") +
+  theme_bw() +
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(legend.position = "none")
+```
+
+Il semblerait que différents groupes émergent et qu'ils soient structurés par le temps.
+
+On peut effectuer une régression globale avec effet (polynomial) de la latitude,
+longitude, et profondeur, auquel s'ajouterait un effet jour/nuit et un effet zone.
+
+```{r lissage_par_periode}
+# Lissage par periode jour nuit
+all_images %>% select(-z_res) %>% 
+  ggplot(aes(x = depth, y = z, color = periode)) +
+  geom_smooth(se = F) + 
+  geom_point(size = 0.3, alpha = 0.3) +
+  # scale_color_viridis_d() +
+  labs(y = "Energy response", x = "Depth") +
+  # theme_bw() +
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(legend.position = "none")
+```
+
+```{r lissage_par_periode_z_res}
+all_images %>% select(-z_res) %>% 
+  mutate(z_res = lm(z ~ poly(depth, lon, lat, degree = 7) +
+                      periode + couche)$residuals) %>% 
+  ggplot(aes(x = depth, y = z_res, color = periode)) +
+  geom_smooth(se = F) + 
+  geom_point(size = 0.3, alpha = 0.3) +
+  labs(y = "Energy response", x = "Depth") +
+  # theme_bw() +
+  scale_x_continuous(expand = c(0, 0))
+```
+
+```{r image_courbe_z_res}
+all_images %>% select(-z_res) %>% 
+  mutate(z_res = lm(z ~ poly(depth, lon, lat, degree = 7) +
+                      periode)$residuals) %>% 
+  ggplot(aes(x = depth, y = z_res,
+             col = factor(index_global))) +
+  geom_path(alpha = 0.5) +
+  scale_color_viridis_d() +
+  labs(y = "Energy response", x = "Depth") +
+  theme_bw() +
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(legend.position = "none")
+```
+
+Il ne semble pas exclu qu'un effet perdure.
+
+```{r}
+to_keep <- all_images$index_global != 990 # Colonne 990 egale à -100 partout!
+foo_data <- all_images[to_keep, ] %>%
+  select(depth, z, index_global) %>% 
+  mutate(index_global = factor(index_global, labels = paste0("Col_", (1:1031)[-990]))) %>% 
+  tidyr::spread(key = "index_global", value = z) %>% 
+  arrange(-depth) 
+```
+
+```{r}
+library(fda)
+range_val <- c(-795, -15)
+bspline_basis <- fda::create.bspline.basis(rangeval = range_val,
+                                           nbasis = 40,
+                                           norder = 4)
+smooth_data <- smooth.basis(argvals = foo_data[, "depth"], 
+                            y = as.matrix(foo_data[, -1]),
+                            fdParobj = bspline_basis)$fd
+plot(smooth_data)
+my_fdPar <- fdPar(bspline_basis)
+my_pca <- pca.fd(fdobj = smooth_data, nharm = 10, harmfdPar = my_fdPar)
+```
+
+```{r analyse_acp}
+my_x <- foo_data[, "depth"]
+composantes = eval.fd(my_x, my_pca$h)
+
+xlim=range(my_x)
+ylim=range(composantes)
+par(mfrow=c(2,2))
+for (icomp in 1:4){
+  plot(my_x,composantes[,icomp], ylim = ylim,
+       type='l',col='red',lwd=2,xlab='profondeur',ylab='')
+  title(main=paste("Composante ",
+                   icomp, " ( ",round(my_pca$varprop[icomp]*100,1),"%)",sep=""))
+  abline(h=0,lty=2)
+}
+par(mfrow=c(1,1))
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot.pca.fd(my_pca, cex=1.2,pointplot=FALSE,col=2)
+par(mfrow=c(1,1))
+```
+
+```{r}
+all_images[to_keep,] %>% 
+  select(index_global, zone) %>% 
+  unique() %>% 
+  pull(zone) -> col_zone
+all_images[to_keep,] %>% 
+  select(index_global, periode) %>% 
+  unique() %>% 
+  pull(periode) -> col_periode
+gg_data <- cbind.data.frame(axe1 = my_pca$scores[,1],
+                 axe2 = my_pca$scores[,2],
+                 axe3 = my_pca$scores[,3],
+                 axe4 = my_pca$scores[,4],
+                 zone = col_zone,
+                 periode = col_periode) 
+p1 <- gg_data %>%   ggplot(aes(x= axe1, y = axe2)) +
+  geom_path(size = 0.5) + 
+  geom_point(size = 4, aes(col = paste(col_zone,  col_periode))) +
+  geom_hline(yintercept = 0) 
+  geom_vline(xintercept = 0) +
+  labs(title = "Plan 12")
+p2 <- gg_data %>%   ggplot(aes(x= axe3, y = axe4)) +
+  geom_path(size = 0.5) + 
+  geom_point(size = 4, aes(col = paste(col_zone,  col_periode))) +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  labs(title = "Plan 34")
+p3 <- gg_data %>%   ggplot(aes(x= axe1, y = axe3)) +
+  geom_path(size = 0.5) + 
+  geom_point(size = 4, aes(col = paste(col_zone,  col_periode))) +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  labs(title = "Plan 13")
+p4 <- gg_data %>%   ggplot(aes(x= axe1, y = axe4)) +
+  geom_path(size = 0.5) + 
+  geom_point(size = 4, aes(col = paste(col_zone,  col_periode))) +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  labs(title = "Plan 14")
+gridExtra::grid.arrange(p1,p2,p3,p4, nrow = 2, ncol = 2)
+```
+

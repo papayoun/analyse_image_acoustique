@@ -1,0 +1,244 @@
+---
+title: "Analyse exploratoire de différents transects acoustiques"
+author: "Pierre Gloaguen"
+date: "16 avril 2019"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+    toc: true
+    toc_depth: 2
+  html_notebook:
+    code_folding: hide
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, comment = NA, cache = T,
+                      message = F)
+```
+
+# Images à disposition
+
+Les images on été décomposées en:
+
+- 5 transects, coupé selon la latitude (en degré Sud)
+    1. 30-32 (chaud et forte altimétrie)
+    2. 32-40.8 (moins chaud et altimétrie + haute)
+    3. 40.8-41.8 (petit transect, baisse brutale alti, temp constante)
+    4. 41.8:42.4 (chute brutale alti et temperature)
+    5. 42.4:46 (alti basse et temp basse)
+
+- 3 couches de profondeurs (en mètres)
+    1. 0-200m
+    2. 200-500
+    3. 500-800
+
+# Structure des données
+
+Pour l'instant, les données sont sous forme de fichier `.txt` avec une ligne
+par profondeur (notée `depth` dans le code), et une colonne par unité de déplacement (notée `x` dans le code).
+
+## Prétraitement, retrait de l'effet profondeur
+
+Pour chaque image, il semblerait qu'il existe une influence de la profondeur
+sur la structuration de la variable réponse (notée `z` dans le code).
+
+On retire cet effet en effectuant une régression polynomiale sur cette variable.
+Au vu de la quantité, on effectue une régression polynômiale en degré 10.
+Quand on aura accès aux variables **jour/nuit**, **latitude** et **longitude**,
+il sera intéressant d'enlever leurs effets également. 
+
+Pour le moment, on enlève l'effet de la variable **déplacement**, qui regroupe 
+ces trois variables. Elle sonts incluses dans la régression polynomiales.
+
+```{r fonctions_import}
+rm(list = ls())
+library(tidyverse)
+
+get_data_path <- function(n_trans, n_im){# Chemin vers les données
+  data_path <- "data_sets/transects_decoupes/"
+  paste0(data_path, "transect", n_trans, "_", n_im, ".txt")
+}
+
+# Fonction d'import, transformation par défaut en data.frame
+import_data <- function(num_transect, num_ss_image,
+                        as.matrix = F) {
+  image_mat <- read.table(get_data_path(num_transect, num_ss_image),
+                      sep = ",") %>% as.matrix()
+  if(as.matrix){
+    return(image_mat)
+  }
+  else{
+    n_x <- ncol(image_mat)
+    n_y <- nrow(image_mat)
+    xs <- 1:n_x; ys <- 1:n_y
+    grille <- expand.grid(depth = -(ys), x = xs)
+    res <- data.frame(depth = grille[, "depth"],
+                      x = grille[, "x"],
+                      z = as.numeric(image_mat),
+                      transect = rep(num_transect, n_x * n_y),# Transect
+                      couche = rep(num_ss_image, n_x * n_y))# Couche
+    return(res)
+  }
+}
+
+## Function toobtain residuals of polynomial regression over depth and x
+get_image_res <- function(transect, couche){
+  image_df <- import_data(transect, couche) %>% 
+    mutate(z_res = lm(z ~ poly(depth, x, degree = 10))$residuals)
+}
+```
+
+```{r get_all_images}
+# Gathering all imported images in a single table
+all_images <- expand.grid(transect = 1:5, couche = 1:3) %>% 
+  purrr::pmap(.f = get_image_res) %>% # List of data.frame
+  dplyr::bind_rows()# Binding in a single by rows
+```
+
+# Analyse descriptives préliminaires des images
+
+## Structure dans les résidus {.tabset}
+On peut constater que cette regression semble retirer certains effets, mais
+une structure persiste (Le code pour la figure est représenté ci dessus)
+
+```{r plot_z_res_function, cache = F}
+# A simpler form with facet wrap instead of 2 different plots in the tibble
+# is not possible, has not free scale is allowed on the z component
+# however, the group_by and nest workaround does the job
+plot_z_res <- function(transect_, couche_){
+  all_images %>% 
+    dplyr::filter(transect == transect_ & couche == couche_) %>% 
+    select(x, depth, z, z_res) %>%
+    gather(key = "champ", value = "valeur", -x, -depth, 
+           convert = T, factor_key = T) %>% # 4 columns table
+    group_by(champ) %>% 
+    nest() %>% # Create a tibble with 2 columns, data and champ
+    mutate(plots = purrr::map2(data, champ, function(df, ch){
+      if(ch == "z"){
+        titre = "Champ initial"
+      }
+      else{
+        titre = "Résidus"
+      }
+      p <- ggplot(df, aes(x = x, y = depth, fill = valeur)) +
+        geom_raster() +
+        scale_x_continuous(expand = c(0, 0)) +
+        scale_y_continuous(expand = c(0, 0)) +
+        labs(y = "Profondeur", title = titre) + 
+        scale_fill_viridis_c() +
+        theme(legend.position = "none")
+      return(p)
+    })) %>% # A plots column is create in the tibble
+    gridExtra::grid.arrange(grobs = .$plots)# And plotted
+}
+
+```
+
+```{r loop_parameters, include = F, cache = F}
+input <- expand.grid(couche = 1:3, transect = 1:5)
+template <- "### Transect %s , couche %s
+
+" # dont't forget the newline
+```
+
+```{r plot_loop_z_res, echo = FALSE, results = "asis"}
+for (i in seq(nrow(input))) {
+  current <- input[i, ]
+  cat(sprintf(template, current$transect, current$couche))
+  plot_z_res(current$transect, current$couche)
+  cat("\n\n")
+}
+```
+
+## Variogramme sur les résidus {.tabset}
+
+On peut regarder les variogrammes empiriques (effectués sur les résidus) par couche. Dans les graphes suivants,
+la colonne `0` représente le variogramme dans la direction *verticale* (profondeur)
+alors que la colonne `90` représente le variogramme dans la direction *horizontale*.
+
+Le code ci-dessus présente la fonction utilisée.
+
+```{r plot_z_vario_function}
+library(gstat)
+plot_z_vario <- function(transect_, couche_){
+  image_df <- dplyr::filter(all_images,
+                            transect == transect_ & couche == couche_)
+  image_gstat <- gstat::gstat(id = "reponse",
+                              formula = z_res ~ 1,
+                              locations = ~ x + depth,
+                              data = image_df)
+  empir_variog <- gstat::variogram(image_gstat, alpha = c(0, 90), cutoff = 50,
+                             width = 1)
+  empir_variog %>% 
+    rename(SemiVariance = gamma,
+           Distance = dist) %>% 
+    select(Distance, SemiVariance, dir.hor) %>% 
+    ggplot(aes(x = Distance, y = SemiVariance)) +
+    geom_point() + facet_wrap(~dir.hor, nrow = 1) +
+    theme_bw() +
+    theme(strip.background = element_rect(fill = "tan2"))
+}
+```
+
+```{r plot_loop_vario, echo = FALSE, results = "asis"}
+for (i in seq(nrow(input))) {
+  current <- input[i, ]
+  cat(sprintf(template, current$transect, current$couche))
+  print(plot_z_vario(current$transect, current$couche))
+  cat("\n\n")
+}
+```
+
+## Commentaires sur les variogrammes
+
+Beaucoup des variogrammes sur la direction horizontale ont une structure avec une portée
+nette. Certains autres ont une structure innatendue, notamment le transect 3 
+et la couche 1, ou encore le transect 2 couche 1.
+
+On voit cependant dans les figures précédentes que ces images correspondent à des cas 
+où la covariable jour/nuit est sans doute présente. La découpe des images est sans 
+doute à questionner ici.
+
+## Autocorrélograme par couche de profondeur {.tabset}
+
+On peut regarder l'autocorrélogramme par profondeur désormais.
+Les résultats semblent redondants avec ceux des précédents graphes
+
+```{r plot_acf_function}
+plot_acf <- function(transect_, couche_, lag_max = 100){
+  all_images %>% 
+    dplyr::filter(transect == transect_, couche == couche_) %>%# Good lines
+    group_by(depth) %>% # One acf per depth
+    nest() %>% # Creates a tibble with depth and a data
+    mutate(# Creation of the acf results
+      acf = purrr::map(data, function(x_){
+        acf(x_$z_res, plot = F, lag.max = lag_max - 1)$acf[,,1]# Only the comp
+      }),
+      lag = purrr::rerun(length(depth), 1:lag_max), # The lags of the acg
+      depth = purrr::map(depth, function(x_){rep(x_, lag_max)})) %>% 
+    select(-data) %>% # No need of original data anymore
+    unnest() %>% #Return to tibble
+    mutate(depth = factor(depth, levels = (-1):(-nrow(.)))) %>%# For good order 
+    ggplot(aes(x = lag, xend = lag, y = 0, yend = acf)) +
+    geom_segment() + 
+    labs(y = "Autocorrelation") +
+    geom_hline(yintercept = 0) +
+    scale_x_continuous(expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    theme_bw() + 
+    theme(axis.text.y = element_blank()) +
+    facet_grid(depth ~ .)
+}
+```
+
+```{r plot_loop_acf, echo = FALSE, results = "asis", fig.height=12}
+for (i in seq(nrow(input))) {
+  current <- input[i, ]
+  cat(sprintf(template, current$transect, current$couche))
+  print(plot_acf(current$transect, current$couche))
+  cat("\n\n")
+}
+```

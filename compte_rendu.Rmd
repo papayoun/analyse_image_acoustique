@@ -170,3 +170,46 @@ dans chacune des sous images.
 Pierre s'est proposé pour faire les scripts d'import et de visualisation de ces données en R.
 Une première analyse exploratoire sera faite conjointement avec Camille dans les jours à venir.
 
+# Troisième réunion (11 Avril 2019)
+
+### Personnes présentes
+
+Cédric Cotté,  Pierre Gloaguen, Camille Merland, Eric Parent, Liliane Bel
+
+## Contenu discuté
+
+La manière de découpé les images globales en différentes sous images a été discutée.
+
+Il a été de découpé les images en 2 ou 3 couches de profondeurs (axe des profondeurs)
+et en 4 masses d'eau (composante Nord-Sud de l'axe des $x$.). Il faudrait également découper
+en période (jour ou nuit). On a à l'heure actuelle 2 saisons par année pour 2 années.
+Au total, on aurait donc 64 ou 96 images
+$$\overset{\text{Couches de prof.}}{(2 \text{ ou } 3)} \times \overset{\text{Masses d'eau}}{4} \times \overset{Années}{2} \times \overset{Saison}{2} \times \overset{Période}{2} = 64 \text{ ou } 96$$  
+
+## Outils suggérés
+
+Pour chaque image (de manière indépendante pour le moment), l'objectif est de déterminer des échelles de structuration spatiale.
+
+Différents outils ont été proposés
+
+### Variogramme
+
+L'idée est d'étudier la structure des variogrammes pour chacune des images.
+Dans ces images, il est clair que les deux dimensions n'ont pas la même interprétation.
+Liliane a suggéré l'utilisation d'outils développés par le réseau RESSTE (<https://informatique-mia.inra.fr/resste/paper-workshop>), notamment de variogrammes spatio-temporels.
+
+Chaque image est alors vu comme un objet spatial, avec pour chaque coordonnée $(x, p)$
+une valeur de champ $Z(x, p)$.
+Pour un décalage spatial $(\Delta_x, \Delta_p)$, on s'intéresse au semi-variogramme,
+à savoir la fonction:
+$$\gamma^2(\Delta_x, \Delta_p) = \mathbb{V}\left[Z(x + \Delta_x, y + \Delta_y) - Z(x, p) \right]$$
+
+Il sera intéressant de voir, au moins de manière descritptive, quelle sont les différents variogrammes ainsi obtenus sur les images.
+
+### Méthodes d'ondelettes
+
+L'idée soumise par Liliane est d'utiliser les méthodes d'ondelette pour la compression d'image afin de caractériser les échelles structurant l'image. Il pourrait être intéressant de comparer, selon les différentes images, les échelles obtenues.
+
+### ACP fonctionnelle
+
+Dans cette idée, une image de taille $n_x \times n_p$ serait vue comme $n_x$ fonctionnelles évaluées en $n_p$ points (chaque fonctionnelle serait le profil d'ntensité selon la profondeur). L'idée est alors d'utiliser l'ACP fonctionnelle comme méthode de réduction de la dimension pour voir ce qui caractérise chaque image.
