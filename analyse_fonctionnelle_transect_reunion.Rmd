@@ -219,7 +219,7 @@ On peut maintenant lisser les données:
 ```{r lissage_donnees}
 library(fda)
 base_splines <- fda::create.bspline.basis(rangeval = range(abscisses),
-                                           nbasis = 30,
+                                           nbasis = 40,
                                            norder = 4)
 courbes_lisses_fd <- smooth.basis(argvals = abscisses, 
                                y = courbes,
