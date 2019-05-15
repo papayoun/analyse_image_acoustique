@@ -7,3 +7,6 @@
 *.pdf
 *.log
 *.Rhistory
+data_sets/*
+*_cache/*
+*_files/*

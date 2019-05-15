@@ -15,7 +15,8 @@ editor_options:
 
 ```{r setup, include=FALSE, message=FALSE}
 library(tidyverse)
-knitr::opts_chunk$set(echo = TRUE, fig.align = "center")
+knitr::opts_chunk$set(echo = TRUE, fig.align = "center", cache = T,
+                      message = F)
 data_path <- "data_sets/transects_decoupes_netcdf/"
 ```
 
@@ -58,12 +59,13 @@ import_data <- function(zone, couche, periode,
 # Le pattern est une expression régulière
 # Chaine de longueur variable commençant par un chiffre finissant par J ou N
 read_arguments <- dir(data_path) %>% 
-  str_extract(pattern = "[1-9].+[J|N]") %>% # identifiant fichier
+  str_extract(pattern = "[1-9].+[jour|nuit].+") %>% # identifiant fichier
+  strsplit(split = "[.]") %>% purrr::map_chr(1) %>% 
   strsplit(split = "_") %>% # separation des champs
   purrr::map(function(x){# mise sous forme de data.frame
-    data.frame(zone = factor(x[1], levels = 1:4),
+    data.frame(zone = factor(x[1], levels = 1:9),
                couche = factor(x[2], levels = 1:3),
-               periode = factor(x[3], levels = c("J", "N")))
+               periode = factor(x[3], levels = c("jour", "nuit")))
   }) %>% 
   dplyr::bind_rows()# concaténation
 ```
@@ -75,7 +77,7 @@ my_image <- read_arguments %>%
   purrr::pmap(.f = import_data) %>% # List of data.frame
   dplyr::bind_rows() %>%
   arrange(-depth) %>% 
-  mutate(index_global = rep(1:1031, 79),
+  mutate(index_global = rep(1:(nrow(.) / 79), 79),
          zone_periode = paste(zone, periode, sep = "-"))
 ```
 
@@ -106,8 +108,7 @@ my_image %>%
 
 **REMARQUES:** 
 
-1. Est ce normal d'avoir un tel creux dans les données?
-2. Pendant le croisement **4-J** (zone 4 en journée), on a un aller retour du bateau.
+1. Pendant le croisement **8-jour** (zone 4 en journée), on a un aller retour du bateau.
 
 # Image globale
 
@@ -125,22 +126,26 @@ my_image %>%
   labs(y = "Prodondeur", fill = "Réponse", x = "Indice de colonne") + 
   facet_wrap(~zone_periode, scales = "free_x", nrow = 1) + 
   theme_bw() + 
-  theme(axis.text.x = element_text(angle=45))
+  theme(axis.text.x = element_text(angle = 90))
 ```
 
-**REMARQUE** On peut également deviner un problème sur la colonne 990 où seules des valeurs de -100 ont été enregistrées. Dans la suite, cette colonne sera retirée.
 
-```{r retrait_ligne_990}
+```{r retrait_ligne_mauvais_indice}
 # index_global est l'indice de colonne
-my_image <- dplyr::filter(my_image, index_global != 990)
+my_image %>% group_by(index_global) %>%
+  summarize(colonne_ok = any(z > -100)) %>% 
+  dplyr::filter(!colonne_ok) %>% 
+  pull(index_global) -> mauvais_indice
+my_image <- dplyr::filter(my_image, !(index_global %in% mauvais_indice))
 ```
 
+**REMARQUE** On peut également deviner un problème sur la colonne `r mauvais_indice` où seules des valeurs de -100 ont été enregistrées. Dans la suite, cette colonne sera retirée.
 
 # Approche fonctionnelle
 
 ## Approche exploratoire
 
-Le jeu de données, stocké dans un objet `my_image`, peut être vu comme une collection de courbes (une par colonne dans l'image précédente) de fonctions $f_1, \dots f_n$ (avec $n = 1030$ ici) représentant le profil de réponse énergétique en chaque position du navire.
+Le jeu de données, stocké dans un objet `my_image`, peut être vu comme une collection de courbes (une par colonne dans l'image précédente) de fonctions $f_1, \dots f_n$ (avec $n = `r length(unique(my_image[, "index_global"]))`$ ici) représentant le profil de réponse énergétique en chaque position du navire.
 
 Ces courbes sont toutes échantillonnées régulièrement en $p = 79$ profondeurs (allant de -15 à -795, tous les 10 mètres).
 On peut ainsi regarder le profil des courbes globalement
@@ -252,12 +257,32 @@ cbind.data.frame(depth = abscisses,
 Ce sont ces courbes lisses qu'on va résumer par une ACP. 
 Les harmoniques de l'ACP seront considérées dans la base des splines. de même degré.
 
-On commence par prendre 4 fonctions harmoniques.
+### Choix du nombre d'harmoniques
+
+Afin de choisir le nombre d'harmoniques à conserver, on regarde l'inertie expliquée
+par chacune d'entre elles.
+
+```{r acp_15h}
+param_harmoniques <- fdPar(base_splines)
+max_harm <- 15
+acp_15h <- pca.fd(fdobj = courbes_lisses_fd, 
+                 nharm = max_harm, 
+                 harmfdPar = param_harmoniques)
+ggplot(data.frame(Harmonique = 1:max_harm,
+                  Pourcentage = acp_15h$varprop * 100),
+       aes(x = Harmonique, y = Pourcentage)) +
+  geom_path() +
+  geom_point() +
+  labs(y = "Pourcentage d'inertie") +
+  theme_bw()
+```
+
+Pour illustrer la méthode, on commence par prendre 4 fonctions harmoniques.
 
 ```{r acp_fonctionelle}
-param_harmoniques <- fdPar(base_splines)
+n_harm <- 4
 acp_courbes <- pca.fd(fdobj = courbes_lisses_fd, 
-                 nharm = 4, 
+                 nharm = n_harm, 
                  harmfdPar = param_harmoniques)
 ```
 
@@ -281,4 +306,281 @@ cbind.data.frame(depth = abscisses,
   facet_wrap(~Composante) +
   theme(legend.position = "none")
 ```
+
+Le pourcentage d'inertie de chaque axe est le suivant:
+```{r inertie_expliquee, echo = F}
+inertie <- round(acp_courbes$varprop * 100, 2)
+names(inertie) = paste0("Axe", 1:n_harm)
+print(inertie)
+```
+
+
+Il reste à déterminer l'interprétation de ces harmoniques. 
+Une première approche directe, mais probablement pas entièrement satisfaisante, et de les analyser par comparaison à la moyenne.
+
+La première harmonique, par exemple, différencie les courbes ayant un fort écart à la moyenne sur les 400 premiers mètres.
+Il semble naturel que l'interprétation de ces quatre harmoniques soit à faire par Cédric et Camille.
+
+Afin d'aider à l'interprétation, on peut ajouter ces courbes principales à la courbe moyenne
+Les valeurs extrêmes des coordonnées des courbes sur ces 4 axes principaux sont de l'ordre de $\pm 200$ pour les deux axes principaux et $\pm 100$ sur les deux autres axes. On choisit donc de représenter ces courbes "extrêmes"
+
+```{r coord_acp}
+coord_acp <- data.frame(acp_courbes$scores) %>% 
+  rename_all(.funs = ~ str_replace(., "X", "Axe")) %>% 
+  mutate(zone_periode = unique(dplyr::arrange(my_image, index_global)[, c("index_global", "zone_periode")])[, "zone_periode"])
+```
+
+Ainsi, sur la figure suivante, la ligne orange représente la courbe moyenne du jeu de données.
+
+Pour chaque harmonique $1 \leq i \leq 4$, la courbe rouge est une courbe extrêmement "positive" (un coefficient $\beta_i >> 0$) sur l'axe $i$ (avec $\beta_j = 0$ pour $j \neq i$), la courbe bleue
+est une courbe extrêmement "négative" ($\beta_i << 0$).
+
+On peut ainsi voir qu'une colonne d'eau à droite sur l'axe 1  (et dont les 3 autres valeurs seraient nulles) est une colonne d'eau à énergie quasi constante le long de la masse d'eau.
+
+```{r courbes_extremes}
+courbe_moyenne <- rowMeans(courbes_lisses)
+coeffs_extremes <- purrr::map(coord_acp %>% select(-zone_periode), range)
+purrr::map_dfc(1:n_harm,
+            function(i){
+              x <- composantes[, i]
+              y <- coeffs_extremes[[i]]
+              out <- data.frame(courbe_moyenne + x * y[1],
+                         courbe_moyenne + x * y[2]) 
+              colnames(out) <- paste0(c("min", "max"), "_PC", i)
+              out
+            }) %>% 
+  mutate(moyenne = courbe_moyenne,
+         x = abscisses) %>% 
+  tidyr::gather(key = "courbe", value = "valeur", -moyenne, -x) %>% 
+  separate(courbe, c("extreme", "composante"), "_") %>% 
+  tidyr::spread(extreme, valeur) %>%
+  ggplot(aes(x = x)) +
+  geom_line(mapping = aes(y = moyenne), col = "orange") + 
+  geom_line(mapping = aes(y = max), linetype = 2, col = "red") +
+  geom_line(mapping = aes(y = min), linetype = 2, col = "blue") +
+  facet_wrap(~composante) +
+  theme_bw() +
+  labs(x = "Profondeur", 
+       y = "Réponse")
+```
+
+
+## Représentation des courbes sur les axes principaux {.tabset}
+
+On peut représenter les courbes dans les différents plans principaux. Cette représentation est faite en visualisant chaque courbe comme un point en dimension 4. On fait ici la représentation dans les points principaux
+
+```{r loop_parameters, include = F, cache = F}
+input <- do.call(function(...) rbind(..., make.row.names = F), apply(expand.grid(1:4, 1:4), 1,  function(z){
+  .x = z[1]; .y = z[2]
+  if(.y <= .x){
+    return(NULL)
+  }
+  return(data.frame(x = .x, y = .y))
+}))
+template <- "### Axes %s et %s
+
+" # dont't forget the newline
+plot_axe <- function(num1, num2){
+  ax1 <- paste0("Axe", num1)
+  ax2 <- paste0("Axe", num2)
+  p <- ggplot(coord_acp, 
+         mapping = aes_string(x = ax1, y = ax2)) +
+    geom_hline(yintercept = 0, linetype = 2) +
+    geom_vline(xintercept = 0, linetype = 2) +
+    geom_point(mapping = aes(col = zone_periode)) +
+    theme_bw() +
+    labs(x = paste("Axe ", num1),
+         y = paste("Axe ", num2),
+         col = "Zone-Période") +
+    theme(legend.position = "bottom")
+  print(p)
+}
+```
+
+```{r plot_loop_z_res, echo = FALSE, results = "asis"}
+for (i in seq(nrow(input))) {
+  # a voir si on peut éviter une boucle
+  current <- input[i, , drop = FALSE]
+  cat(sprintf(template, current$x, current$y))
+  plot_axe(current$x, current$y)
+  cat("\n\n")
+}
+```
+
+## Exemple de possible interprétation
+
+Si on considère la zone "2-nuit" par exemple, la distribution de ces coordonnées 
+sur les 4 axes peut être représentée ainsi:
+
+```{r coord_2_nuit}
+coord_acp %>% 
+  as.data.frame() %>% 
+  dplyr::filter(zone_periode == "2-nuit") %>% 
+  select(-zone_periode) %>% 
+  tidyr::gather(key = "Harmonique", value = "coord", factor_key = T) %>% 
+  ggplot(aes(x = Harmonique, y = coord)) +
+  geom_boxplot() + 
+  labs(y = "Coordonnée") +
+  geom_hline(yintercept = 0, linetype = 3)
+```
+
+Ainsi, au vu des courbes de composantes principales vues plus haut, cette section 
+est principalement composée de sections à fort coefficients positifs sur l'axe 1 et 
+de coefficients non nuls sur les 3 autres axes. Il s'agit donc principalement de courbes "plates",
+à énergie quasi constante le long de la colonne d'eau.
+
+## Classification non supervisée
+
+Les couleurs projetées plus haut, bien que choisies en amont, semblent être discriminantes pour sur le différents plans principaux. Cependant, une autre classification est possible. Par une approche non supervisée, en considérant chaque courbe dans un espace en dimension **Nombre d'harmoniques** + 2 (coordonnées géographiques du relevé).
+
+Pour cela, on commence paar calculer 2 distances entre les courbes.
+
+- La distance dans l'espace principal de dimension 4
+- La distance dans l'espace géohraphique
+
+```{r calcul_distances}
+coord_geo <-  my_image %>% dplyr::arrange(index_global) %>%  
+  select(index_global, lon, lat) %>% 
+  unique() %>% 
+  select(lon, lat) %>% 
+  as.matrix()
+
+dist_acp <- coord_acp %>% 
+  select(-zone_periode) %>% 
+  dist()
+dist_geo <- apply(coord_geo, 1, function(x) geosphere::distHaversine(x, coord_geo, r = 6378.137)) %>% 
+  as.dist()
+```
+
+On calcule une distance globale comme une somme (à pondérer?) de ces deux distances.
+Cette distance nous sert à faire une classification ascendante hiérarchique.
+
+```{r cah}
+poids_distance <- 0.5
+dist_tot <- (1 - poids_distance) * dist_acp + poids_distance * dist_geo
+my_cah <- hclust(dist_tot, method = "ward.D2")
+plot(my_cah, labels = F, xlab = "Individus")
+```
+
+Ici on a pris un poids égal pour chacune des distances.
+Il semble y avoir plusieurs niveaux de coupures possibles. 
+Par exemple, entre 3 et 7 groupes semble raisonnable.
+On peut regarder la répartition spatiale des groupes. 
+
+```{r representation_cluster}
+n_groupes <- 2:7
+purrr::map_dfc(n_groupes, function(k){
+  res <- data.frame(cutree(my_cah, k = k))
+  colnames(res) <- paste("K", k, sep = "_")
+  rownames(res) <- NULL
+  res}) %>% 
+  cbind.data.frame(coord_geo) %>% 
+  tidyr::gather(key = "n_classes", value = "classe", -lon, -lat, factor_key = T) %>% 
+  mutate(n_classes = factor(n_classes, labels = paste("K =", n_groupes))) %>% 
+  ggplot(aes(x = lon, y = lat, col = factor(classe))) + 
+  geom_point() +
+  labs(x = "Longitude", y = "Latitude", title = "Avec distance géographique (poids 1/2)",
+       col = "Classe estimée") +
+  theme_bw() +
+  facet_wrap(~n_classes)
+```
+
+Sur le choix de la pondération, il est probable qu'il soit très important. Encore une fois ici, il semble naturel qu'il soit fait par Camille et Cédric.
+
+Voici par exemple les classifications si on ne prend pas en compte la distance géographique:
+
+```{r cah_sans_geo}
+poids_distance <- 0
+dist_tot <- (1 - poids_distance) * dist_acp + poids_distance * dist_geo
+my_cah <- hclust(dist_tot, method = "ward.D2")
+plot(my_cah, labels = F, xlab = "Individus")
+```
+
+
+```{r representation_cluster_sans_geo}
+purrr::map_dfc(n_groupes, function(k){
+  res <- data.frame(cutree(my_cah, k = k))
+  colnames(res) <- paste("K", k, sep = "_")
+  rownames(res) <- NULL
+  res}) %>% 
+  cbind.data.frame(coord_geo) %>% 
+  tidyr::gather(key = "n_classes", value = "classe", -lon, -lat, factor_key = T) %>% 
+  mutate(n_classes = factor(n_classes, labels = paste("K =", n_groupes))) %>% 
+  ggplot(aes(x = lon, y = lat, col = factor(classe))) + 
+  geom_point() +
+  labs(x = "Longitude", y = "Latitude", title = "Sans distance géographique",
+       col = "Classe estimée") +
+  theme_bw() +
+  facet_wrap(~n_classes)
+```
+
+### Projection de la classification dans le plan principal.
+
+Dans ce dernier cas, si on prend par exemple 6 groupes, on peut tracer leur répartition dans le
+plan principal:
+
+```{r proj_cah}
+K_final <- 6
+coord_acp %>% 
+  as.data.frame() %>% 
+  mutate(classif_cah = cutree(my_cah, k = K_final)) %>% 
+  separate(zone_periode, c("zone", "periode"), "-") %>% 
+  ggplot(aes(x = Axe1, y = Axe2, col = factor(classif_cah)
+             , shape = periode)) +
+  geom_hline(yintercept = 0, linetype = 3) +
+  geom_vline(xintercept = 0, linetype = 3) +
+  scale_shape_manual(values = c(4, 22)) + 
+  theme_bw() +
+  geom_point() +
+  labs(x = "Axe 1", y = "Axe 2",
+       col = "Classe estimée", 
+       shape = "Période")
+```
+
+On voit par exemple que les groupes estimés sont très bien structurés par la nuit et le jour.
+
+## Barycentre de classes
+
+On peut représenter la courbe moyenne (le barycentre de chaque nuage auquel on ajoute la courbe moyenne globale) par classification.
+
+```{r barycentres}
+barycentres <- coord_acp %>% 
+  as.data.frame() %>% 
+  mutate(classif_cah = factor(cutree(my_cah, k = 6))) %>% 
+  select(-zone_periode) %>% 
+  group_by(classif_cah) %>% 
+  summarise_all(mean) %>%
+  ungroup() %>% 
+  as.data.frame()
+```
+
+```{r courbes_bary}
+courbes_bary <- purrr::map_dfr(1:K_final,
+               function(i){
+                 mat_coeff <- matrix(dplyr::filter(barycentres,
+                                                   classif_cah == i)[1, ] %>% 
+                                       select(-classif_cah) %>% 
+                                       as.numeric(),
+                                     ncol = n_harm,
+                                     nrow = length(abscisses),
+                                     byrow = T)
+                 coords_bar <- courbe_moyenne +
+                   rowSums(mat_coeff * as.matrix(composantes))
+                 data.frame(x = abscisses,
+                            y = coords_bar) %>% 
+                   mutate(classif_cah = factor(i, levels = 1:K_final))
+               })
+```
+
+```{r plot_courbes_bary}
+ggplot(courbes_bary, mapping = aes(x = x, y = y,
+                                   col = classif_cah)) +
+  geom_path(size = 2) +
+  facet_wrap(~classif_cah) +
+  theme_bw() +
+  labs(x = "Profondeur", y = "Réponse",
+       col = "Classe estimée") +
+  theme(legend.position = "none")
+```
+
 
